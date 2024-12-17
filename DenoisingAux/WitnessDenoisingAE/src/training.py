@@ -5,26 +5,28 @@ from pathlib import Path
 import sys
 sys.path.append(os.path.relpath("./criterion.py"))
 sys.path.append(os.path.relpath("./convAE.py"))
-sys.path.append(os.path.relpath("./standardization.py"))
+sys.path.append(os.path.relpath("./dataloader.py"))
 
 import criterion as cr
 import convAE as conv
-import standardization as std
+import dataloader as dl
+#import standardization as std
 
 import numpy as np
 import torch
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 from typing import Callable, Optional, Tuple
 import h5py
 
-torch.set_default_tensor_type(torch.FloatTensor)
+#torch.set_default_dtype(torch.float32)
 
 def TrainEpoch(
         model: torch.nn.Module,
         optimizer: torch.optim.Optimizer,
         criterion: torch.nn.Module,
-        trainData,
-        validationData,
+        trainDataloader,
+        validationDataloader,
         profiler: Optional[torch.profiler.profile] = None,
         scaler: Optional[torch.cuda.amp.GradScaler] = None,       
 ):
@@ -34,7 +36,11 @@ def TrainEpoch(
     samplesSeen = 0
     startTime = time.time()
     model.train()
-    for witnesses, bolometerOut in trainData:
+    for batch_idx, data in enumerate(trainDataloader):
+        print(f'Batch -- {batch_idx}')
+        bolometerOut = data[:,:,0,:]
+        witnesses = data[:,:,1:,:]
+
         optimizer.zero_grad(set_to_none=True) # clear gradient
         # forward step
         with torch.autocast("cuda", enabled=scaler is not None):
@@ -66,15 +72,19 @@ def TrainEpoch(
         )
 
         trainLog = f'Training loss: {trainLoss:.4e}'
+        print(f'Training loss: {trainLoss:.4e}')
         
         # validation performance
-        if validationData is not None:
-            validLoss = 0
+        if validationDataloader is not None:
+            validationLoss = 0
             samplesSeen = 0
             
             model.eval()
             with torch.no_grad():
-                for witnesses, bolometerOut in validationData:
+                for data in validationDataloader:
+                    bolometerOut = data[:,:,0,:]
+                    witnesses = data[:,:,1:,:]
+
                     noisePrediction = model(witnesses)
                     loss = criterion(noisePrediction, bolometerOut)
                     
@@ -90,18 +100,18 @@ def TrainEpoch(
         return trainLoss, validationLoss, duration, trainRate
     
 def Train(
-    architecture: Callable,
     outputDirectory: str,
     # data
-    witnessOut: np.ndarray,
-    boloOut: np.ndarray,
-    kernelLength: float,
-    kernelStride: float,
+    stdDataPath: str,
+    # witnessOut: np.ndarray,
+    # boloOut: np.ndarray,
+    # kernelLength: float,
+    # kernelStride: float,
     sampleRate: float,
-    validationData: Optional[Tuple[np.ndarray, np.ndarray]] = None,
+    # validationData: Optional[Tuple[np.ndarray, np.ndarray]] = None,
     # pre-processing
-    freqLow: float = 0.0,
-    freqHigh: float = 0.0,
+    freqLow= None,
+    freqHigh=None,
     # optimization
     batchSize: int = 32,
     maxEpochs: int = 40,
@@ -126,24 +136,26 @@ def Train(
     device = device or "cpu"
     
     logging.info("Preprocessing")
-    # TODO: Fill out preprocessing steps
+    print("Preprocessing")
     # Standardize witness output and bolometer output
     # Bandpass - bolometer already goes through Bessel bandpass, no implementation for now
     
+    dataset = dl.DatasetFromNPZ(npzFile='', batchSize=32, preprocess=False, standardizedDataPath=stdDataPath)
+    trainDataset, valDataset, testDataset = dataset.split_data(trainRatio=0.7, valRatio=0.2)
+
+    trainLoader = DataLoader(trainDataset, batch_size=1, shuffle=True)
+    validationLoader = DataLoader(valDataset, batch_size=1, shuffle=False)
+    testLoader = DataLoader(testDataset, batch_size=1, shuffle=False)
     # Standardizing training and validation data
-    witnessScaler = std.Standardizer()
-    bolometerScaler = std.Standardizer()
+    # witnessScaler = std.Standardizer()
+    # bolometerScaler = std.Standardizer()
 
-    witnessScaled = witnessScaler.Fit(witnessOut)
-    bolometerScaled = bolometerScaler.Fit(bolometerOut)
-
-    # TODO: Instantiate training and validation datasets
-    trainData = createTrainData()
+    # witnessScaled = witnessScaler.Fit(witnessOut)
+    # bolometerScaled = bolometerScaler.Fit(bolometerOut)
 
     # Model, loss function, optimizer, and lr scheduler
-    # model = architecture(len(X))
-    # TODO: Create model here with the appropriate input parameters
-    
+    print("Defining model")
+    model = conv.ModelAE(inChannels=1, numWitnesses=15, kernelLength=100)
     model.to(device)
     
     if initWeights is not None:
@@ -156,6 +168,7 @@ def Train(
     logging.info(model)
     
     logging.info("Initializing loss and optimizer")
+    print("Defining criteria")
     criterion = cr.PSDLoss(
         sampleRate,
         fftLength = fftLength,
@@ -205,12 +218,13 @@ def Train(
             profiler = None
         
         logging.info(f'Epoch {epoch + 1} / {maxEpochs}')
+        print(f'Epoch {epoch + 1} / {maxEpochs}')
         trainLoss, validationLoss, duration, trainRate = TrainEpoch(
             model,
             optimizer,
             criterion,
-            trainData,
-            validationData,
+            trainLoader,
+            validationLoader,
             profiler,
             scaler,
         )
@@ -232,7 +246,7 @@ def Train(
                 sinceLastImprovement += 1
                 if sinceLastImprovement >= earlyStop:
                     logging.info(
-                        f"Validation loss did not improve for {} epochs, stopping loop early".format(earlyStop)
+                        f"Validation loss did not improve for {earlyStop} epochs, stopping loop early"
                     )
                     break
         else:

@@ -13,10 +13,10 @@ class ConvBlock(nn.Module):
             inChannels: int,
             outChannels: int,
             kernelSize: tuple[int, int],
-            stride: int,
-            padding: int,
+            stride,
+            padding,
             transpose: bool,
-            outputPadding: Optional[int] = None,
+            outputPadding: Optional[tuple[int, int]] = None,
             activation: nn.Module = nn.ReLU,
     ) -> None:
         super().__init__()
@@ -49,10 +49,10 @@ class ConvBlock(nn.Module):
         return x
 
 class ModelAE(nn.Module):
-    def __init__(self, inChannels, kernelLength=10, corrWitness=2):
+    def __init__(self, inChannels, numWitnesses, kernelLength=10, corrWitness=2):
         super().__init__()
 
-        self.numWitnesses = inChannels
+        self.numWitnesses = numWitnesses
         self.inputConv = ConvBlock(
             inChannels,
             inChannels,
@@ -68,34 +68,58 @@ class ModelAE(nn.Module):
                 inChannels,
                 outChannels,
                 kernelSize=(corrWitness,kernelLength),
-                stride=2,
-                padding=3,
+                stride=(1,2),
+                padding=(0, kernelLength // 2),
                 transpose=False,
             )
             self.downsampler.add_module(f'CONV_{i+1}', convBlock)
             inChannels = outChannels
 
         self.upsampler = nn.Sequential()
-        for i,outChannels in enumerate([32,16,8, self.numWitnesses]):
-            convBlock = ConvBlock(
-                    inChannels,
-                    outChannels,
-                    kernelSize=(corrWitness,kernelLength),
-                    stride=2,
-                    padding=3,
-                    outputPadding=1,
-                    transpose=True,
-            )
+        for i,outChannels in enumerate([16, 8, 4, 1]):
+            if(outChannels!=1):
+                convBlock = ConvBlock(
+                        inChannels,
+                        outChannels,
+                        kernelSize=(corrWitness,kernelLength),
+                        stride=(1,2),
+                        padding=(0, kernelLength // 2),
+                        outputPadding= (0,1),
+                        transpose=True,
+                )
+            else:
+                convBlock = ConvBlock(
+                        inChannels,
+                        outChannels,
+                        kernelSize=(corrWitness,kernelLength),
+                        stride=(1,2),
+                        padding=(0, kernelLength // 2),
+                        outputPadding= (0,0),
+                        transpose=True,
+                )
             self.upsampler.add_module(f'TRANS_CONV_{i+1}', convBlock)
             inChannels = outChannels
         
-        self.outputConv = nn.Conv2d(
-            inChannels, 1, kernel_size=(corrWitness,kernelLength), stride=1, padding='same'
+        self.outputConv1 = nn.Conv2d(
+            inChannels, 
+            1, 
+            kernel_size=(numWitnesses // 2, 1), 
+            stride=1, 
+            padding=0
+        )
+        
+        self.outputConv2 = nn.Conv2d(
+            1, 
+            1, 
+            kernel_size=((numWitnesses // 2) + 2, 1), 
+            stride=1, 
+            padding=0
         )
 
     def forward(self, x):
         x = self.inputConv(x)
         x = self.downsampler(x)
         x = self.upsampler(x)
-        x = self.outputConv(x)
-        return x[:, 0]
+        x = self.outputConv1(x)
+        x = self.outputConv2(x)
+        return x

@@ -3,7 +3,7 @@ from typing import List, Optional, Union
 import numpy as np
 import torch
 import torch.nn as nn
-from scipy.signal.spectral import _median_bias
+# from scipy.signal._spectral import _median_bias
 
 def _validateShapes(x: torch.Tensor, y: torch.Tensor):
     # acceptable combinations of shapes:
@@ -43,84 +43,84 @@ def _validateShapes(x: torch.Tensor, y: torch.Tensor):
 def _median(x, axis):
     return torch.quantile(x, q=0.5, axis=axis)
 
-def _fastCSD(
-    x: torch.Tensor,
-    nExample: int,
-    nStride: int,
-    window: torch.Tensor,
-    scale: torch.Tensor,
-    average: str,
-    y: Optional[torch.Tensor] = None,
-):
-    # for fast implementation, use the built-in stft
-    # module along the last dimension and let torch
-    # handle the heavy lifting under the hood
-    if x.ndim > 2:
-        # stft only works on 2D input, so roll the
-        # channel dimension out along the batch
-        batch_size = x.shape[0]
-        num_channels = x.shape[1]
-        x = x.reshape(-1, x.shape[-1])
+# def _fastCSD(
+#     x: torch.Tensor,
+#     nExample: int,
+#     nStride: int,
+#     window: torch.Tensor,
+#     scale: torch.Tensor,
+#     average: str,
+#     y: Optional[torch.Tensor] = None,
+# ):
+#     # for fast implementation, use the built-in stft
+#     # module along the last dimension and let torch
+#     # handle the heavy lifting under the hood
+#     if x.ndim > 2:
+#         # stft only works on 2D input, so roll the
+#         # channel dimension out along the batch
+#         batch_size = x.shape[0]
+#         num_channels = x.shape[1]
+#         x = x.reshape(-1, x.shape[-1])
 
-        if y is not None and y.ndim == 3:
-            y = y.reshape(-1, x.shape[-1])
-    else:
-        batch_size = None
+#         if y is not None and y.ndim == 3:
+#             y = y.reshape(-1, x.shape[-1])
+#     else:
+#         batch_size = None
 
-    x = x - x.mean(axis=-1, keepdims=True)
-    fft = torch.stft(
-        x,
-        n_fft=nExample,
-        hop_length=nStride,
-        window=window,
-        normalized=False,
-        center=False,
-        return_complex=True,
-    )
-    if y is not None:
-        y = y - y.mean(axis=-1, keepdims=True)
-        y_fft = torch.stft(
-            y,
-            n_fft=nExample,
-            hop_length=nStride,
-            window=window,
-            normalized=False,
-            center=False,
-            return_complex=True,
-        )
-        if batch_size is not None and fft.shape[0] > y_fft.shape[0]:
-            nfreq = nExample // 2 + 1
-            fft = fft.reshape(batch_size, num_channels, nfreq, -1)
-            y_fft = y_fft[:, None]
+#     x = x - x.mean(axis=-1, keepdims=True)
+#     fft = torch.stft(
+#         x,
+#         n_fft=nExample,
+#         hop_length=nStride,
+#         window=window,
+#         normalized=False,
+#         center=False,
+#         return_complex=True,
+#     )
+#     if y is not None:
+#         y = y - y.mean(axis=-1, keepdims=True)
+#         y_fft = torch.stft(
+#             y,
+#             n_fft=nExample,
+#             hop_length=nStride,
+#             window=window,
+#             normalized=False,
+#             center=False,
+#             return_complex=True,
+#         )
+#         if batch_size is not None and fft.shape[0] > y_fft.shape[0]:
+#             nfreq = nExample // 2 + 1
+#             fft = fft.reshape(batch_size, num_channels, nfreq, -1)
+#             y_fft = y_fft[:, None]
 
-        fft = torch.conj(fft) * y_fft
-    else:
-        fft = fft.abs() ** 2
+#         fft = torch.conj(fft) * y_fft
+#     else:
+#         fft = fft.abs() ** 2
 
-    stop = None if nExample % 2 else -1
-    if x.ndim == 1:
-        fft[1:stop] *= 2
-    elif fft.ndim < 4:
-        fft[:, 1:stop] *= 2
-    else:
-        fft[:, :, 1:stop] *= 2
-    fft *= scale
+#     stop = None if nExample % 2 else -1
+#     if x.ndim == 1:
+#         fft[1:stop] *= 2
+#     elif fft.ndim < 4:
+#         fft[:, 1:stop] *= 2
+#     else:
+#         fft[:, :, 1:stop] *= 2
+#     fft *= scale
 
-    if average == "mean":
-        fft = fft.mean(axis=-1)
-    else:
-        bias = _median_bias(fft.shape[-1])
-        if y is not None:
-            real_median = _median(fft.real, -1)
-            imag_median = 1j * _median(fft.imag, -1)
-            fft = real_median + imag_median
-        else:
-            fft = _median(fft, -1)
-        fft /= bias
+#     if average == "mean":
+#         fft = fft.mean(axis=-1)
+#     else:
+#         bias = _median_bias(fft.shape[-1])
+#         if y is not None:
+#             real_median = _median(fft.real, -1)
+#             imag_median = 1j * _median(fft.imag, -1)
+#             fft = real_median + imag_median
+#         else:
+#             fft = _median(fft, -1)
+#         fft /= bias
 
-    if fft.ndim == 2 and batch_size is not None:
-        fft = fft.reshape(batch_size, num_channels, -1)
-    return fft
+#     if fft.ndim == 2 and batch_size is not None:
+#         fft = fft.reshape(batch_size, num_channels, -1)
+#     return fft
 
 class TorchWelch(nn.Module):
     def __init__(
@@ -161,10 +161,11 @@ class TorchWelch(nn.Module):
         self.device = device
 
     def forward(self, x:torch.Tensor, y: Optional[torch.Tensor] = None):
+        # TODO: Need to modify this for batched training
+        x = x.squeeze(0)
         if x.shape[-1] < self.nExample:
             raise ValueError(
-                f'Number of samples {x.shape[-1]} in input x is insufficient for
-                number of fft samples {self.nExample}'
+                f'Number of samples {x.shape[-1]} in input x is insufficient for number of fft samples {self.nExample}'
             )
         elif x.ndim > 3:
             raise ValueError(
@@ -221,8 +222,8 @@ class TorchWelch(nn.Module):
         if self.average == "mean":
             return fft.mean(axis=-2)
         else:
-            bias = _median_bias(numSegments)
-            return _median(fft, -2) / bias
+            print('Median not yet supported!')
+            return fft.mean(axis=-2)
 
 class PSDLoss(nn.Module):
     '''Calculate PSD loss (average over frequency of the PSD ratio)'''
@@ -260,7 +261,7 @@ class PSDLoss(nn.Module):
             sampleRate,
             fftLength,
             overlap,
-            average="median",
+            average="mean",
             device=device, 
         )
     
