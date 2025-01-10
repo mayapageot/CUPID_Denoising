@@ -178,5 +178,30 @@ class DatasetFromNPZIter(IterableDataset):
 #             idx = torch.randperm(X.shape[0])
 #             X = X[idx]
 #             y = y[idx]
-        
-        
+
+
+class DatasetFromBinary(Dataset):
+    def __init__(self, file_paths, positions, length, dtype=np.float32):
+        """
+        Args:
+            file_paths (list of str): Paths to the binary files.
+            positions (list of int): Start positions of the data in the binary file.
+            ranges (list of int): Length of data to read from each position.
+            dtype (numpy.dtype): Data type of the binary file.
+        """
+        self.file_paths = file_paths
+        self.positions = positions
+        self.length = length
+        self.dtype = dtype
+
+        # Create a memmap for the binary file
+        self.file_maps = [np.memmap(file_path, dtype=dtype, mode='r') for file_path in self.file_paths]
+
+    def __len__(self):
+        return len(self.positions)
+
+    def __getitem__(self, index):
+        start = self.positions[index]
+        # Extract the data using slicing
+        data = np.array([file_map[start:start + self.length].astype(np.float32) for file_map in self.file_maps])
+        return torch.tensor(data, dtype=torch.float32)
