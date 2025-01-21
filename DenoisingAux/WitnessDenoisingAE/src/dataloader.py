@@ -2,6 +2,8 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader, random_split
 from torch.utils.data import IterableDataset
+from contextlib import contextmanager
+import os
 
 class DatasetFromNPZ(Dataset):
     def __init__(self, 
@@ -179,29 +181,155 @@ class DatasetFromNPZIter(IterableDataset):
 #             X = X[idx]
 #             y = y[idx]
 
+class NoiseFinder:
+    def __init__(self, Trigger_paths, window_size, pulse_length):
+        import uproot
+        self.Trigger_paths = Trigger_paths
+        self.window_size = window_size
+        self.pulse_length = pulse_length
+        self.Trigger = np.array([],dtype=int)
+        self.posNoise = np.array([],dtype=int)
+
+    def read_Trigger(self):
+        self.Trigger = np.array([], dtype=int)
+        for Trigger_path in self.Trigger_paths:
+            root_file = uproot.open(Trigger_path)
+            self.Trigger = np.concatenate(
+                (self.Trigger, root_file["trigger_tree"]["TriggerSample"].array(library='np').astype(int)))
+        self.Trigger = np.sort(self.Trigger)
+
+    def getNoisePos(self):
+        dTrigger = self.Trigger[1:] - self.Trigger[:-1]
+        good_interals = dTrigger < self.window_size+self.pulse_length
+        self.posNoise = self.Trigger[good_interals] + dTrigger//2
+
+    def save_posNoise(self,path):
+        torch_posNoise = torch.from_numpy(self.posNoise)
+        torch.save(torch_posNoise,path)
+
 
 class DatasetFromBinary(Dataset):
-    def __init__(self, file_paths, positions, length, dtype=np.float32):
+    def __init__(self, file_paths, positions_path, win_length,
+                 globalStd=None, channel_out=0, win_shift=0, start_window=None, end_window=None, dtype=np.float32):
         """
         Args:
             file_paths (list of str): Paths to the binary files.
-            positions (list of int): Start positions of the data in the binary file.
-            ranges (list of int): Length of data to read from each position.
+            positions_path (str): Path to Start positions of the data in the binary file.
             dtype (numpy.dtype): Data type of the binary file.
         """
-        self.file_paths = file_paths
-        self.positions = positions
-        self.length = length
-        self.dtype = dtype
 
+        self.file_paths = file_paths
+        self.positions_path = positions_path
+        self.positions = torch.load(positions_path).to(torch.int)
+        self.win_length = win_length
+        self.win_shift = int(win_shift)
+        self.dtype = dtype
+        self.globalStd = globalStd
+        self.globalHarmonicStd = globalStd
+        self.globalHarmonicStdRMS = torch.zeros(len(self.file_paths))
+        self.channel_out = channel_out
+        self.start_window = start_window if start_window is not None else win_length // 4
+        self.end_window = end_window if end_window is not None else 3 * (win_length // 4)
         # Create a memmap for the binary file
         self.file_maps = [np.memmap(file_path, dtype=dtype, mode='r') for file_path in self.file_paths]
+
+    def get_std(self, batchSize, select=False):
+        '''Compute mean std and Harmonic mean std using batch processing as well as a cut using  Harmonic std'''
+        loader = DataLoader(DatasetFromBinary(file_paths=self.file_paths, positions_path=self.positions_path,
+                                              win_length=self.win_length,globalStd=self.globalStd,
+                                              channel_out=self.channel_out, win_shift=self.win_shift,
+                                              start_window=self.start_window, end_window=self.end_window,
+                                              dtype=self.dtype), batch_size=batchSize, shuffle=False)
+        totalMeanStd = torch.zeros(len(self.file_paths))
+        totalInvSumStd = torch.zeros(len(self.file_paths))
+        stds = torch.ones((len(self), len(self.file_paths)))
+        for index, batch in loader:
+            std = torch.std(torch.cat((batch[:, :, :self.start_window], batch[:, :, self.end_window:]), dim=2), dim=2)
+            if select:
+                stds[index] = std
+            batchMeanStd = torch.mean(std,dim=0)
+            totalInvSumStd += torch.sum(1/std,dim=0)
+            totalMeanStd += batchMeanStd
+        self.globalStd = totalMeanStd / len(loader)
+        self.globalHarmonicStd = len(self)/totalInvSumStd
+        if select:
+            self.globalHarmonicStdRMS = torch.sqrt(torch.sum((1 / stds - 1 / self.globalHarmonicStd[None, :]) ** 2, dim=0)/(len(self)-1))*self.globalHarmonicStd**2
+            sel = torch.all(torch.ge(self.globalHarmonicStd[None, :] + 3 * self.globalHarmonicStdRMS[None, :], stds),
+                            dim=1)
+            self.positions = self.positions[sel]
+            file_name, file_extension = os.path.splitext(self.positions_path)
+            torch.save(self.positions, file_name + "_selected" + file_extension)
+            self.positions_path = file_name + "_selected" + file_extension
+            self.get_std(batchSize,False)
 
     def __len__(self):
         return len(self.positions)
 
     def __getitem__(self, index):
-        start = self.positions[index]
-        # Extract the data using slicing
-        data = np.array([file_map[start:start + self.length].astype(np.float32) for file_map in self.file_maps])
-        return torch.tensor(data, dtype=torch.float32)
+        start = self.positions[index] - self.win_shift
+        data = np.array([file_map[start:start + self.win_length].astype(np.float32) for file_map in self.file_maps])
+        data = torch.tensor(data, dtype=torch.float32)
+        return index, data
+
+
+
+class DatasetSTFTFromBinary(DatasetFromBinary):
+    def __init__(self, file_paths, positions_path, win_length,
+                 n_fft, hop_length, channel_out=0, globalStd=None, win_shift=0, start_window=None, end_window=None,
+                 select_sample=False,dtype=np.float32):
+        super().__init__(file_paths, positions_path, win_length, globalStd=globalStd,
+                         channel_out=channel_out, win_shift=win_shift, start_window=start_window, end_window=end_window, dtype=dtype)
+        if globalStd is None:
+            self.get_std(32, select_sample)
+        elif isinstance(globalStd, list):
+            self.globalStd = torch.tensor(globalStd)
+        self.n_fft = n_fft
+        self.hop_length = hop_length
+        self.win_length = win_length
+        self.fftwin_length = n_fft
+        self.window = torch.hann_window(self.fftwin_length)
+
+    def __getitem__(self, index):
+        # Get the trace from base class
+        index,data = super().__getitem__(index)
+        # Compute the baseline
+        mean = torch.mean(torch.cat((data[:, :self.start_window], data[:, self.end_window:]), dim=1), dim=1)
+        # Remove the baseline and Standardize
+        data = (data - mean[:, None]) / self.globalStd[:, None]
+        # Clone the window to predict
+        y = torch.clone(data[self.channel_out, self.start_window:self.end_window])
+        # Blind the output in the input
+        data[self.channel_out, self.start_window:self.end_window] = 0
+        # Compute the STFT
+        stft = torch.stft(data, n_fft=self.n_fft, hop_length=self.hop_length,win_length=self.fftwin_length,
+                          onesided=True,center=True, return_complex=False)
+        B,N,T,C = stft.shape
+        # Reshape to Channels,Frames,Frequencies
+        stft = stft.permute(3,0, 2, 1).reshape(B*C, T, N)
+        return stft, y
+
+class DatasetSTFTFromNpy(Dataset):
+    def __init__(self, file_path, win_length,
+                 n_fft, hop_length, channel_out=0, start_window=None, end_window=None):
+        self.data = torch.from_numpy(np.transpose(np.load(file_path, mmap_mode='r'), (1,0,2))[:10000].astype(np.float32)).float()
+        mean = torch.mean(torch.cat((self.data [:, :, :start_window], self.data [:, :, end_window:]), dim=2), dim=2)
+        std = torch.std(torch.cat((self.data[:, :, :start_window], self.data[:, :, end_window:]), dim=2), dim=2)
+        self.data = (self.data - mean[:, :, None]) / torch.mean(std, dim=0)[None,:,None]
+        # extract the data to predict
+        self.y = torch.clone(self.data[:, channel_out, start_window:end_window])
+        # set the data to predict to 0 in the input
+        self.data[:, channel_out, start_window:end_window] = 0
+        self.n_fft = n_fft
+        self.hop_length = hop_length
+        self.win_length = win_length
+        self.fftwin_length = n_fft
+        self.window = torch.hann_window(self.fftwin_length)
+
+    def __len__(self):
+        return self.data.shape[0]
+    def __getitem__(self, index):
+        stft = torch.stft(self.data[index], n_fft=self.n_fft, hop_length=self.hop_length,win_length=self.fftwin_length, onesided=True,center=True,
+                          return_complex=False)
+        B,N,T,C = stft.shape
+        stft = stft.permute(3,0, 2, 1).reshape(B*C,T,N)
+        return stft,self.y[index]
