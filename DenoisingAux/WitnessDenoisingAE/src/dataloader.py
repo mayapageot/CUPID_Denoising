@@ -209,8 +209,9 @@ class NoiseFinder:
 
 
 class DatasetFromBinary(Dataset):
-    def __init__(self, file_paths, positions_path, win_length,
-                 globalStd=None, channel_out=0, win_shift=0, start_window=None, end_window=None, dtype=np.float32):
+    def __init__(self, file_paths, win_length, positions_path=None,
+                 globalStd=None, StdCut=None ,channel_out=0, win_shift=0, start_window=None, end_window=None,
+                 dtype=np.uint32):
         """
         Args:
             file_paths (list of str): Paths to the binary files.
@@ -220,7 +221,12 @@ class DatasetFromBinary(Dataset):
 
         self.file_paths = file_paths
         self.positions_path = positions_path
-        self.positions = torch.load(positions_path).to(torch.int)
+        self.StdCut = torch.tensor(StdCut)
+        if self.positions_path is not None:
+            self.positions = torch.load(positions_path).to(torch.int)
+        elif StdCut is not None:
+            file_length = min([os.path.getsize(file)//np.dtype(dtype).itemsize-1 for file in file_paths])
+            self.positions = torch.arange(0,file_length//20-win_length,win_length)
         self.win_length = win_length
         self.win_shift = int(win_shift)
         self.dtype = dtype
@@ -231,12 +237,26 @@ class DatasetFromBinary(Dataset):
         self.start_window = start_window if start_window is not None else win_length // 4
         self.end_window = end_window if end_window is not None else 3 * (win_length // 4)
         # Create a memmap for the binary file
-        self.file_maps = [np.memmap(file_path, dtype=dtype, mode='r') for file_path in self.file_paths]
+        self.file_maps = [np.memmap(file_path, dtype=dtype, mode='r', offset=4) for file_path in self.file_paths]
 
-    def get_std(self, batchSize, select=False):
+    def select_event(self, batchSize=32):
+        loader = DataLoader(DatasetFromBinary(file_paths=self.file_paths, positions_path=self.positions_path,
+                                              win_length=self.win_length, globalStd=self.globalStd, StdCut=self.StdCut,
+                                              channel_out=self.channel_out, win_shift=self.win_shift,
+                                              start_window=self.start_window, end_window=self.end_window,
+                                              dtype=self.dtype), batch_size=batchSize, shuffle=False)
+        stds = torch.ones((len(self), len(self.file_paths)))
+        for index, batch in loader:
+            std = torch.std(torch.cat((batch[:, :, :self.start_window], batch[:, :, self.end_window:]), dim=2), dim=2)
+            stds[index] = std
+        sel = torch.all(torch.ge(self.StdCut[None, :], stds),dim=1)
+        self.positions = self.positions[sel]
+        self.globalStd = torch.mean(stds[sel],dim=0)
+
+    def get_std(self, batchSize=32, select=False):
         '''Compute mean std and Harmonic mean std using batch processing as well as a cut using  Harmonic std'''
         loader = DataLoader(DatasetFromBinary(file_paths=self.file_paths, positions_path=self.positions_path,
-                                              win_length=self.win_length,globalStd=self.globalStd,
+                                              win_length=self.win_length,globalStd=self.globalStd,StdCut=self.StdCut,
                                               channel_out=self.channel_out, win_shift=self.win_shift,
                                               start_window=self.start_window, end_window=self.end_window,
                                               dtype=self.dtype), batch_size=batchSize, shuffle=False)
@@ -251,7 +271,7 @@ class DatasetFromBinary(Dataset):
             totalInvSumStd += torch.sum(1/std,dim=0)
             totalMeanStd += batchMeanStd
         self.globalStd = totalMeanStd / len(loader)
-        self.globalHarmonicStd = len(self)/totalInvSumStd
+        self.globalHarmonicStd = torch.reciprocal(totalInvSumStd) * len(self)
         if select:
             self.globalHarmonicStdRMS = torch.sqrt(torch.sum((1 / stds - 1 / self.globalHarmonicStd[None, :]) ** 2, dim=0)/(len(self)-1))*self.globalHarmonicStd**2
             sel = torch.all(torch.ge(self.globalHarmonicStd[None, :] + 3 * self.globalHarmonicStdRMS[None, :], stds),
@@ -262,25 +282,35 @@ class DatasetFromBinary(Dataset):
             self.positions_path = file_name + "_selected" + file_extension
             self.get_std(batchSize,False)
 
+    def load_and_process_window_torch(self,file_map, start):
+        np_data = np.array(file_map[start:start + self.win_length], dtype=self.dtype)
+        np_data = ((np.right_shift(np_data, 8).astype(np.float32) / (2 ** 23)) * 10.24 - 10.24).astype(np.float32)
+        tensor_data = torch.from_numpy(np_data)  # Convert to PyTorch
+        return tensor_data
+
     def __len__(self):
         return len(self.positions)
 
     def __getitem__(self, index):
         start = self.positions[index] - self.win_shift
-        data = np.array([file_map[start:start + self.win_length].astype(np.float32) for file_map in self.file_maps])
-        data = torch.tensor(data, dtype=torch.float32)
+        data = torch.stack([self.load_and_process_window_torch(file_map, start) for file_map in self.file_maps])
         return index, data
 
 
 
 class DatasetSTFTFromBinary(DatasetFromBinary):
-    def __init__(self, file_paths, positions_path, win_length,
-                 n_fft, hop_length, channel_out=0, globalStd=None, win_shift=0, start_window=None, end_window=None,
+    def __init__(self, file_paths, win_length, positions_path=None,
+                 globalStd=None, StdCut=None,
+                 n_fft=128, hop_length=64, channel_out=0, win_shift=0, start_window=None, end_window=None,
                  select_sample=False,dtype=np.float32):
-        super().__init__(file_paths, positions_path, win_length, globalStd=globalStd,
-                         channel_out=channel_out, win_shift=win_shift, start_window=start_window, end_window=end_window, dtype=dtype)
+        super().__init__(file_paths, win_length, positions_path=positions_path,globalStd=globalStd, StdCut=StdCut ,
+                         channel_out=channel_out, win_shift=win_shift, start_window=start_window, end_window=end_window,
+                         dtype=dtype)
         if globalStd is None:
-            self.get_std(32, select_sample)
+            if positions_path is None:
+                self.select_event()
+            else:
+                self.get_std(32, select_sample)
         elif isinstance(globalStd, list):
             self.globalStd = torch.tensor(globalStd)
         self.n_fft = n_fft
