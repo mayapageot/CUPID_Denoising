@@ -141,7 +141,7 @@ def get_interpolate_chi2(dataset, transf, arg_max, meanpulse):
     freq = np.fft.fftfreq(4000, 1e-4)
     dt = arg_max - 1999
     for pulses in loader:
-        diff_pulse = np.diff(np.append(signals, signals[:, -1][:, None], axis=1), axis=1)
+        diff_pulse = np.diff(np.append(pulses, pulses[:, -1][:, None], axis=1), axis=1)
         fft = np.fft.fft(diff_pulse, axis=1)
         f_pulse = fft / np.linalg.norm(fft, axis=1)[:, None]
         chi2 = np.sum(
