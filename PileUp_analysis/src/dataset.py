@@ -1,8 +1,10 @@
 import numpy as np
 from torch.utils.data import Dataset
 import optuna
-
-main_dir = "/feynman/work/projets/cupid/data/LSM/RUN9_pulse_injected"
+from dotenv import load_dotenv
+import os
+load_dotenv()
+main_dir = os.getenv("DATA_PATH")
 # Define a custom PyTorch dataset for loading and processing binary data
 class BinaryDataset(Dataset):
     def __init__(self, file_path, win_length, positions, win_shift=0, dtype=np.uint32):

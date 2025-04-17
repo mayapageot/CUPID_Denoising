@@ -14,7 +14,7 @@ def compute_mahalanobis_distance_squared(x, y, mean, cov):
     inv_cov = np.linalg.inv(cov)
     d2 = np.einsum('ij,jk,ik->i', diffs, inv_cov, diffs)
     return d2
-from scipy.stats import chi2
+
 
 def get_inliers_outliers(x, y, mean, cov, confidence=0.90, ):
     """
