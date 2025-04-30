@@ -6,6 +6,37 @@ import os
 load_dotenv()
 main_dir = os.getenv("DATA_PATH")
 # Define a custom PyTorch dataset for loading and processing binary data
+from torch.utils.data import Dataset
+
+
+def write_data_stream(file_path, data: np.ndarray) -> None:
+    data = (((data + 10.24) * (2 ** 23) / 10.24).astype(np.uint32) << 8)
+    with open(file_path, "wb") as f:
+        data.tofile(f)
+    print("Derivative data saved to:", file_path)
+
+
+def differenciate_data(channel,delta):
+    dir_dif = main_dir + f"/channel{channel}/dif/pup_n1-d{delta}_000813_20230628T161508_{channel:03}_000_dif.bin"
+    dir_raw = main_dir + f"/channel{channel}/pup_n1-d{delta}_000813_20230628T161508_{channel:03}_000.bin"
+    bin_file = np.fromfile(dir_raw, dtype = np.uint32, offset = 4)
+    bin_file = ((np.right_shift(bin_file, 8).astype(np.float32) / (2 ** 23)) * 10.24 - 10.24).astype(np.float32)
+    bin_file_dif = np.diff(bin_file)
+    write_data_stream(dir_dif, bin_file_dif)
+def modify_pos(channel, delta):
+    partial = 0
+    path_pos_single =main_dir + f"/channel{channel}/pup_n1-d{delta}_000813_20230628T161508_{channel:03}_{partial:03}.pos"
+    pos_file_single = np.loadtxt(path_pos_single)[:15999]
+    positions_single = pos_file_single[:, 0].astype(int)
+    path_trig = main_dir + f"/channel{channel}/dif/pup_n1-d{delta}_000813_20230628T161508_{channel:03}_{partial:03}_dif.bin.edtrigger"
+    pos_trig = np.loadtxt(path_trig)[:, 0]
+    pos_in_trig = np.searchsorted(pos_trig, positions_single)
+    dif = pos_trig[pos_in_trig[pos_in_trig - 1 < len(pos_trig)] - 1] - positions_single[pos_in_trig - 1 < len(pos_trig)]
+    pos_file_single[np.argwhere(pos_in_trig - 1 < len(pos_trig))[dif > -60], 0] = np.reshape(
+        pos_trig[pos_in_trig[pos_in_trig - 1 < len(pos_trig)] - 1][dif > -60], (-1, 1))
+    np.savetxt(
+         main_dir + f"/channel{channel}/pup_n1-d{delta}_000813_20230628T161508_{channel:03}_{partial:03}_bis.pos",
+        pos_file_single)
 class BinaryDataset(Dataset):
     def __init__(self, file_path, win_length, positions, win_shift=0, dtype=np.uint32):
         """
@@ -72,7 +103,7 @@ class BinaryDataset(Dataset):
 
         return data
 def create_data_sets(channel, shift = 0, pos_prefix = "_bis"):
-    partial = 1 if channel in [17] else 0
+    partial =0 if channel in [17] else 0
     file_path_pileup = main_dir + f"/channel{channel}/dif/pup_n1-d8_000813_20230628T161508_{channel:03}_{partial:03}_dif.bin"
     path_pos_pileup = main_dir + f"/channel{channel}/pup_n1-d8_000813_20230628T161508_{channel:03}_{partial:03}{pos_prefix}.pos"
     pos_file_pileup = np.loadtxt(path_pos_pileup)[:15000]
@@ -95,13 +126,12 @@ def get_meanpulse_ANPS(channel):
     return mean, ANPS
 
 def get_best_param(channel):
-    partial = 1 if channel in [17] else 0
-    study = optuna.load_study(study_name=f"study_channel{channel}",
-                              storage="sqlite:///" + main_dir + f"/channel{channel}/study_channel{channel}_gauss_spec_bis.db")
+    study = optuna.load_study(study_name=f"study_channel{channel}_divgauss",
+                              storage="sqlite:///" + main_dir + f"/study_channel{channel}.db")
     return study.best_params, study.best_value
 
 def from_edtrigger_to_pos(channel,delta):
-    partial = 1 if channel == 17 else 0
+    partial = 0 if channel == 17 else 0
     path_pos_single = main_dir + f"/channel{channel}/pup_n1-d{delta}_000813_20230628T161508_{channel:03}_{partial:03}.pos"
     pos_file_single = np.loadtxt(path_pos_single)[:15999]
     positions_single = pos_file_single[:, 0].astype(int)
@@ -114,3 +144,7 @@ def from_edtrigger_to_pos(channel,delta):
     np.savetxt(
         main_dir + f"/channel{channel}/pup_n1-d{delta}_000813_20230628T161508_{channel:03}_{partial:03}_bis.pos",
         pos_file_single)
+if __name__ == "__main__":
+    for delta in [0,8]:
+        modify_pos(19, delta)
+        # differenciate_data(19, delta)
