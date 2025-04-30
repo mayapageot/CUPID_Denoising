@@ -211,7 +211,7 @@ class NoiseFinder:
 class DatasetFromBinary(Dataset):
     def __init__(self, file_paths, win_length, positions_path=None,
                  globalStd=None, StdCut=None ,channel_out=0, win_shift=0, start_window=None, end_window=None,
-                 dtype=np.uint32):
+                 dtype=np.uint32,**kwargs):
         """
         Args:
             file_paths (list of str): Paths to the binary files.
@@ -224,8 +224,12 @@ class DatasetFromBinary(Dataset):
         self.StdCut = StdCut if StdCut is None else torch.tensor(StdCut)
         self.file_length = min([os.path.getsize(file)//np.dtype(dtype).itemsize-1 for file in file_paths])
         if self.positions_path is not None:
-            self.positions = torch.load(positions_path).to(torch.int)
-            self.positions = self.positions[self.positions<self.file_length-win_length]
+            if self.positions_path[-3:]==".pt":
+                self.positions = torch.load(positions_path).to(torch.int)
+                self.positions = self.positions[self.positions<self.file_length-win_length]
+            elif self.positions_path[-4:]==".pos":
+                self.positions = torch.from_numpy(np.loadtxt(positions_path).astype(int)[:,0]//4).to(torch.int)
+                self.positions = self.positions[self.positions<self.file_length-win_length]
         elif StdCut is not None:
             self.positions = torch.arange(0,self.file_length-win_length,win_length)
         else:
@@ -243,7 +247,7 @@ class DatasetFromBinary(Dataset):
         self.file_maps = [np.memmap(file_path, dtype=dtype, mode='r', offset=4) for file_path in self.file_paths]
 
 
-    def select_event(self, batchSize=32, HasPulse=False, update_value = False):
+    def select_event(self, batchSize=32, HasPulse=False, new_path = None):
         loader = DataLoader(DatasetFromBinary(file_paths=self.file_paths, positions_path=self.positions_path,
                                               win_length=self.win_length, globalStd=self.globalStd, StdCut=self.StdCut,
                                               channel_out=self.channel_out, win_shift=self.win_shift,
@@ -260,8 +264,9 @@ class DatasetFromBinary(Dataset):
         sel = torch.all(torch.ge(self.StdCut[None, :], stds),dim=1)
         self.positions = self.positions[sel]
         self.globalStd = torch.mean(stds[sel],dim=0)
-        if update_value:
-            torch.save(self.positions,self.positions_path[:-3]+"_selected.pt")
+        if type(new_path)==str:
+            print("pos file save at : ",new_path)
+            torch.save(self.positions,new_path)
 
     def get_std(self, batchSize=32, select=False):
         '''Compute mean std and Harmonic mean std using batch processing as well as a cut using  Harmonic std'''
@@ -294,7 +299,11 @@ class DatasetFromBinary(Dataset):
             self.get_std(batchSize,False)
 
     def exclude_positions(self, exclude_pos_path):#could be improved by reducing the window rejection
-        exclude_positions = torch.load(exclude_pos_path).to(torch.int)
+        if exclude_pos_path[-3:]==".pt":
+            exclude_positions = torch.load(exclude_pos_path).to(torch.int)
+        elif exclude_pos_path[-4:]==".pos":
+            pos_file_single = np.loadtxt(exclude_pos_path)[:15000]
+            exclude_positions = torch.from_numpy(pos_file_single[:, 0].astype(int) // 4).to(torch.int)
         right_idx = torch.searchsorted(exclude_positions, self.positions, right=True)
         right_idx_clamped = torch.clamp(right_idx, 0, len(exclude_positions) - 1)
         # Get neighboring values: left (before insert) and right (after insert)

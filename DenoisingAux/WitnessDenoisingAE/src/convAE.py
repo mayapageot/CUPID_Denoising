@@ -258,7 +258,6 @@ class AutoencoderLSTM(nn.Module):
             for i, f in enumerate(filters)
         ])
         self.latent_space_size = reduce(lambda x, _: (x - 1) // 2, range(len(filters)), self.num_freq)
-        print("latent_space_size: ", self.latent_space_size)
         self.GrLSTMs = nn.ModuleList([GroupedLSTM(group_number=LSTM_group_number, input_size=filters[-1] * self.latent_space_size) for _ in range(self.n_LSTM)])
         #self.GrLSTM2 = GroupedLSTM(group_number=LSTM_group_number, input_size=filters[-1] * latent_space_size)
         self.reshapeLayer = [self.num_frame, filters[-1], self.latent_space_size]

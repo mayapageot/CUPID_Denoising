@@ -43,7 +43,7 @@ def create_data_sets(dataset_dict, data_spliting_dict):
     test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
     return dataset_dict, train_loader, val_loader, test_loader
 
-def train(dir_train, num_epochs=10, InfoDict=None, valiation_step=-1):
+def train(dir_train, num_epochs=50, InfoDict=None, valiation_step=-1):
     os.makedirs(dir_train, exist_ok=True)
     if InfoDict is None:
         if not os.path.isfile(os.path.join(dir_train, "InfoDict.json")):
@@ -172,22 +172,22 @@ if __name__=="__main__":
     RUN = 9
     meas = 813
     name_meas = "20230628T161508"
-    channel_list = [9,11,13,15,17,19]
+    channel_list = [3,5,9,11,13,15,17,19]
     file_paths = [dir_path + "000813_20230628T161508_{:03}_000.bin".format(i) for i in channel_list]
     n_channel = 2 * len(file_paths)
-    for channel_guess in [1,2,3,4]:
+    for channel_guess in range(len(channel_list)):
         channel = int(file_paths[channel_guess][-11:-8])
         win_length = 4096
         n_fft = 320
         out_window_size = 2048
         hop_length = 64
-        positions_path = "/feynman/work/projets/cupid/data/LSM/RUN9/positions/pos_start_813_" + "_".join(
-            [str(I) for I in channel_list]) + ".pt"
+        positions_path = ("/feynman/work/projets/cupid/data/LSM/RUN9/positions/pos_start_"+
+                          "_".join([str(I) for I in channel_list])+".pt")
         positions_path = positions_path if os.path.isfile(positions_path) else None
         #globalStd= [46491.36328125, 58046.87109375, 96895.8984375, 75740.21875, 101882.8359375, 84200.265625, 61979.71875, 236090.34375]
         #globalStd = None
-        globalStd_path = "/feynman/work/projets/cupid/data/LSM/RUN9/positions/globalStd_" + "_".join(
-            [str(I) for I in channel_list]) + ".pt"
+        globalStd_path = ("/feynman/work/projets/cupid/data/LSM/RUN9/positions/globalStd_"+
+                          "_".join([str(I) for I in channel_list])+".pt")
 
         globalStd = None if not os.path.isfile(globalStd_path) else torch.load(globalStd_path).tolist()
         dataset_dict = dict(file_paths=file_paths, positions_path=positions_path, win_length=win_length,
@@ -213,6 +213,7 @@ if __name__=="__main__":
         os.makedirs(dir_train, exist_ok=True)
         with open(os.path.join(dir_train, "InfoDict.json"), "w") as out_file:
             json.dump(InfoDict, out_file)
+        print(dir_train)
         train(dir_train, num_epochs=10)
     # opt_parameters_dict = dict(LSTM_group_number=[16,128],n_fft=[384,1024,32], n_conv_layer=[4,7])
     # dir_trainings = ("/feynman/work/projets/cupid/scratch/mpageot/data/trainings/opt_{}_RUN{}_{}_channel{}_4/".
