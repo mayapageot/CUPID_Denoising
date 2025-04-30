@@ -2,10 +2,6 @@ import numpy as np
 from scipy.signal.windows import tukey
 from torch.utils.data import DataLoader
 from scipy.interpolate import interp1d
-import sys
-import os
-sys.path.append(os.path.relpath("../utility"))
-from functions import polyfit_batch
 
 
 def compute_transfer_function(fs, points, position, meanpulse, bslspec):

@@ -1,8 +1,13 @@
 import numpy as np
+import sys
+import os
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 import PileUp_analysis.utility.functions as fn
 import PileUp_analysis.src.analysis as an
 import PileUp_analysis.src.dataset as ds
-import sys
+
 from optuna.storages import RDBStorage
 import optuna
 def tunning(trial,transf_OF,meanpulse,data_single,data_pileup):
@@ -20,8 +25,8 @@ def tunning(trial,transf_OF,meanpulse,data_single,data_pileup):
     BI = fn.calculate_BI(rp, 0.8)
     print(A, f0, sigma , BI)
     return BI
-# channel = int(sys.argv[1])
-channel = 3
+channel = int(sys.argv[1])
+# channel = 3
 database_url = "sqlite:///" + ds.main_dir + f"/channel{channel}/study_channel{channel}.db"
 storage = RDBStorage(url=database_url)
 # search_space = {"A": np.arange(1, 20,0.5).tolist(), "f0": np.arange(100, 500,10).tolist(), "sigma":np.arange(0.4, 1.2,0.2).tolist()}
