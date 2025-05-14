@@ -6,7 +6,6 @@ import os
 load_dotenv()
 main_dir = os.getenv("DATA_PATH")
 # Define a custom PyTorch dataset for loading and processing binary data
-from torch.utils.data import Dataset
 
 
 def write_data_stream(file_path, data: np.ndarray) -> None:
@@ -102,9 +101,9 @@ class BinaryDataset(Dataset):
         data = self.load_and_process_window(self.file_map, start)
 
         return data
-def create_data_sets(channel, shift = 0, pos_prefix = "_bis"):
-    partial =0 if channel in [17] else 0
-    file_path_pileup = main_dir + f"/channel{channel}/dif/pup_n1-d8_000813_20230628T161508_{channel:03}_{partial:03}_dif.bin"
+def create_data_sets(channel, shift = 0, pos_prefix = "_bis",file_sufixe=""):
+    partial = 0 if channel in [17] else 0
+    file_path_pileup = main_dir + f"/channel{channel}/dif/pup_n1-d8_000813_20230628T161508_{channel:03}_{partial:03}_dif.bin"+file_sufixe
     path_pos_pileup = main_dir + f"/channel{channel}/pup_n1-d8_000813_20230628T161508_{channel:03}_{partial:03}{pos_prefix}.pos"
     pos_file_pileup = np.loadtxt(path_pos_pileup)[:15000]
     dt_pileup = pos_file_pileup[:,-1]
@@ -115,13 +114,13 @@ def create_data_sets(channel, shift = 0, pos_prefix = "_bis"):
     path_pos_single = main_dir + f"/channel{channel}/pup_n1-d0_000813_20230628T161508_{channel:03}_{partial:03}{pos_prefix}.pos"
     pos_file_single = np.loadtxt(path_pos_single)[:15000]
     positions_single = pos_file_single[:,0].astype(int)//4
-    file_path_single = main_dir + f"/channel{channel}/dif/pup_n1-d0_000813_20230628T161508_{channel:03}_{partial:03}_dif.bin"
+    file_path_single = main_dir + f"/channel{channel}/dif/pup_n1-d0_000813_20230628T161508_{channel:03}_{partial:03}_dif.bin"+file_sufixe
     data_single = BinaryDataset(file_path_single, 4000, positions_single, win_shift= 2000 - shift)
     return data_single,data_pileup,dt_pileup,dE_pileup,datas_pileup
 
-def get_meanpulse_ANPS(channel):
+def get_meanpulse_ANPS(channel,corr_type = "raw"):
     partial = 1 if channel in [17] else 0
-    ANPS = np.fromfile(main_dir + f"/channel{channel}/dif/raw_noise_diff.bin_spec.bin.dif")
+    ANPS = np.fromfile(main_dir + f"/channel{channel}/dif/{corr_type}_noise_diff.bin_spec.bin.dif")
     mean = np.fromfile(main_dir + f"/channel{channel}/dif/pup_n1-d0_000813_20230628T161508_{channel:03}_{partial:03}_diff_bis.bin_edmean.bin")
     return mean, ANPS
 
